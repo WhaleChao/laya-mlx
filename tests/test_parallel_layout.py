@@ -97,6 +97,8 @@ def test_all_permutations_preserve_option_logits_and_action(dtype, atol):
     model = DecisionModel(config(), {"head_layers": 2, "option_layout": "parallel"})
     model.set_dtype(dtype)
     model.eval()
+    # Match checkpoint loading: finish lazy random initialization before inference.
+    mx.eval(model.parameters())
 
     def run(order, parallel):
         model.parallel = parallel
