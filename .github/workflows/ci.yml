@@ -35,4 +35,17 @@ jobs:
       - run: python -m pip install -e '.[dev,reference,demo]'
       - run: ruff check . && ruff format --check .
       - run: pytest -q
+      - name: Diagnose native CPU failures
+        if: failure()
+        run: python -u -m scripts.diagnose_parallel_cpu
+      - name: Show native crash reports
+        if: failure()
+        run: |
+          python - <<'PYCODE'
+          from pathlib import Path
+          folder = Path.home() / "Library/Logs/DiagnosticReports"
+          for path in sorted(folder.glob("*Python*"))[-2:]:
+              print(path.name)
+              print(path.read_text()[:40000])
+          PYCODE
       - run: python -m build
