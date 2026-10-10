@@ -185,6 +185,11 @@ class ModernBert(nn.Module):
         if (position_ids is None) != (option_ids is None):
             raise ValueError("position_ids and option_ids must be provided together")
         x = self.embeddings(input_ids)
+        if option_ids is not None and mx.default_device() == mx.cpu:
+            # Hosted macOS 26 can abort in the CPU FP16 parallel-attention path.
+            # Keep parameter storage precision but use FP32 intermediate math on
+            # CPU; GPU execution retains the checkpoint's requested precision.
+            x = x.astype(mx.float32)
         if option_ids is None:
             masks = attention_masks(attention_mask, self.config.local_attention)
         else:

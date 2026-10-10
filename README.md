@@ -284,7 +284,9 @@ checkpoints; unknown layouts raise an error. **Do not enable parallel layout by 
 checkpoint's config:** its weights were trained with a different input layout. Permutation
 invariance is verified within floating-point tolerances on tiny random models; this is not a
 task-accuracy claim for new weights. Compiled/FP16 reductions can differ in the last decimals,
-and exact or near ties can choose a different label.
+and exact or near ties can choose a different label. CPU parallel-layout inference uses FP32
+intermediate math to avoid native half-precision kernel failures on hosted macOS 26; parameter
+storage precision is preserved, and GPU execution retains the requested precision.
 
 Language detection now avoids treating all-capital acronyms/address fragments as French or
 Spanish while preserving emphasis capitals and mixed scripts. French device footers such as
