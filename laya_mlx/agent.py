@@ -22,7 +22,9 @@ from .common import (
     resolve_noul_labels,
     serialize_state,
     temp_bucket,
+    uses_parallel_layout,
 )
+from .confidence import apply_confidence_gate, check_min_confidence
 from .model import DecisionModel, EncoderConfig, sanitize_weights
 from .prepared import PrefixCache
 from .tokenizer import Tokenizer
@@ -78,12 +80,20 @@ def collate_items(items, pad_id, *, pad_to_multiple=None, max_length=None):
         "marker_mask": np.zeros((n, count), dtype=np.bool_),
         "qtype": np.array([item["qtype"] for item in items], dtype=np.int32),
     }
+    if any("layout" in item for item in items):
+        if not all("layout" in item for item in items):
+            raise ValueError("Cannot collate mixed option layouts")
+        batch["position_ids"] = np.zeros((n, length), dtype=np.int32)
+        batch["option_ids"] = np.zeros((n, length), dtype=np.int32)
     for i, item in enumerate(items):
         length, count = len(item["ids"]), len(item["markers"])
         batch["input_ids"][i, :length] = item["ids"]
         batch["attention_mask"][i, :length] = True
         batch["marker_pos"][i, :count] = item["markers"]
         batch["marker_mask"][i, :count] = True
+        if "layout" in item:
+            for key, values in item["layout"].items():
+                batch[key][i, :length] = values
     return batch
 
 
@@ -130,6 +140,7 @@ class Agent:
         self.encoder_cfg = json.loads((self.model_dir / "encoder/config.json").read_text())
         if "encoder" not in self.cfg or "head_layers" not in self.cfg:
             raise ValueError("Laya config must specify encoder and head_layers")
+        uses_parallel_layout(self.cfg)
         enc_cfg = EncoderConfig.from_dict(self.encoder_cfg)
         max_len = self.cfg.get("max_len", 512)
         head_max_len = self.cfg.get("head_max_len", 192)
@@ -260,7 +271,8 @@ class Agent:
         items, internal = [], []
         for qid, definition in questions.items():
             q = self._question(qid, definition)
-            ids, markers, stats, state_stats = build_sequence(
+            parallel = uses_parallel_layout(self.cfg)
+            sequence = build_sequence(
                 self.tok,
                 state,
                 q,
@@ -270,7 +282,9 @@ class Agent:
                 state_ids=state_ids,
                 return_stats=True,
                 return_truncation_stats=True,
+                return_layout=parallel,
             )
+            ids, markers, stats, state_stats = sequence[:4]
             if len(markers) != len(render_options(q)):
                 raise ValueError(f"Question {qid!r} has too many options for the token budget")
             items.append(
@@ -282,6 +296,8 @@ class Agent:
                     "state_stats": state_stats,
                 }
             )
+            if parallel:
+                items[-1]["layout"] = sequence[4]
             internal.append(q)
         return items, internal
 
@@ -293,7 +309,9 @@ class Agent:
             mx.eval(result)
         return result
 
-    def system_one(self, state, questions):
+    def system_one(self, state, questions, *, min_confidence=None):
+        if min_confidence is not None:
+            min_confidence = check_min_confidence(min_confidence)
         items, internal = self.prepare(state, questions)
         answers = {}
         question_ids = list(questions)
@@ -355,11 +373,14 @@ class Agent:
         collapsed = collapsed_options(question_ids, items)
         if collapsed:
             usage["options"] = collapsed
-        return {
+        result = {
             "model": "laya-rl-agent",
             "answers": answers,
             "usage": usage,
         }
+
+        apply_confidence_gate([result], min_confidence)
+        return result
 
     predict = system_one
 

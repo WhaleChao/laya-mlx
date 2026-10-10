@@ -152,7 +152,7 @@ _DEVICE = (
 )
 _DEVICE_FOOTER = re.compile(
     r"^\s*((enviad[oa] (do|pelo|pela|via|desde|a partir do)( meu| minha| mi)?|sent from( my)?|"
-    r"envoy[ée] (depuis|de) (mon |ma |mes )?)"
+    r"envoy[ée] (depuis|de)( mon| ma| mes)?)"
     r" (%s)( (%s|para|for|no|na|\d+|phone|device|pro|max|mini|plus|using [a-z][a-z0-9_.+-]*))*"
     r"|(obter o|get) outlook (para|for) (ios|android))[\s.!]*$" % (_DEVICE, _DEVICE),
     re.I,
@@ -303,7 +303,13 @@ def email_state(
     which passes the body through whole.
 
     Any other keyword becomes a field of the state, so it is read by the model; a typo here is an
-    input mutation, not an error.
+    input mutation, not an error. The exception is a keyword whose value is exactly ``None``: it is
+    dropped rather than added, so ``email_state(..., thread_id=None)`` gives the same state as
+    leaving the keyword out. The key is absent, not null -- and the distinction reaches the model,
+    because `laya.common.serialize_state` turns the state into JSON before it is tokenized, so a
+    retained ``None`` would put ``"thread_id": null`` in the prompt. ``sender`` is dropped on the
+    same call by a different rule, falsiness rather than ``None``, so ``sender=""`` leaves no
+    ``from`` field either.
     """
     state = {
         "subject": (subject or "").strip(),

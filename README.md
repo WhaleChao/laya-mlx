@@ -207,6 +207,96 @@ uv run laya-mlx predict \
 ```
 
 
+### Upstream v0.4.1 runtime port
+
+Version 0.4.0 selectively incorporates upstream [`1adc59f`](https://github.com/NandhaKishorM/laya/commit/1adc59f7e371deb601fcfa18a14e25db238addcc)
+(v0.4.1). **Behavior change:** `Router()` now defaults to `multilingual` for undecided
+text, including very short inputs such as `"refund me"`. Identified English still routes
+to `english`; use `Router(default="english")` to retain the previous fallback. The default
+resident cap remains one; use `max_loaded=2` or preload when alternating languages.
+
+Cold checkpoint construction runs outside the lifecycle lock. Concurrent loads of the same
+checkpoint share a build; resident loads and status reads remain available. `unload(name)`
+waits only for that checkpoint's build, while `unload()` waits for all builds. Eviction and
+unload release the MLX free-buffer cache; references held by a caller or an in-flight prediction
+remain valid. Cache clearing is process-wide and may cause later buffer allocations.
+
+Custom checkpoints can be registered alongside the built-ins without loading immediately:
+
+```python
+from laya_mlx import Router, predict_tournament
+
+router = Router(models={"billing": "./models/billing-mlx"})
+router.register("support", "./models/support-mlx", description="Support classifier")
+result = router.predict(state, questions, model="support")
+print(router.registered)
+router.unregister("support")
+```
+
+Names are case-normalized and may contain letters, digits, `.`, `_`, and `-`; built-in aliases
+retain their meaning. Replacing a source invalidates the old resident model and prevents an old
+in-flight build from entering the cache. `attach("custom", agent)` also registers a name, but a
+source must be registered before reloading it after unload. Built-ins and the current default
+cannot be unregistered. Use `register` for changes rather than mutating `router.models` directly.
+
+`Agent.predict` and `Router.predict` accept an optional scalar or per-option-count confidence gate:
+
+```python
+result = agent.predict(
+    state,
+    questions,
+    min_confidence={
+        "choice:2": 0.8,
+        "choice:11+": 0.95,
+        "default": 0.7,
+    },
+)
+for answer in result["answers"].values():
+    if answer["abstention"] != "passed":
+        print("Needs review", answer)
+```
+
+The gate adds `abstention` (`passed`, `abstained`, or `unevaluated`),
+`abstention_threshold`, and `low_confidence=True` for answers below the threshold. It preserves
+the answer and does not invoke a fallback automatically. Missing bucket thresholds fall back to
+`default`, then zero. Bucket sizes are `2`, `3-5`, `6-10`, and `11+`, prefixed by `choice:`,
+`score:`, or `noul:`. Invalid names and non-finite thresholds fail before inference. Without
+`min_confidence`, these fields are absent. The gate uses `answer_confidence` (the maximum option
+probability); temperature clamping alone does not make it a calibrated probability of correctness.
+
+For large choice sets, `predict_tournament` needs no embedding model:
+
+```python
+result = predict_tournament(router, state, questions, group_size=16, model="billing")
+```
+
+Each round chooses one winner per group and continues until at most `group_size` finalists
+remain. This costs additional inference passes and can lose a good candidate in an early round;
+grouping follows criteria order. The final probabilities, confidence, and `usage` describe only
+the final pass, not all original options or total computation. `tournament[qid]` reports finalist
+`labels`, original label count `n`, and elimination `rounds`. Small choices and non-choice questions
+pass through to the final call unchanged.
+
+Checkpoints trained with `"option_layout": "parallel"` are supported end to end: shared option
+positions, option-isolating attention masks, MLX inference (including `compile=True`), prefix
+caching, and conversion. Missing configuration means `sequential`, preserving existing published
+checkpoints; unknown layouts raise an error. **Do not enable parallel layout by editing an old
+checkpoint's config:** its weights were trained with a different input layout. Permutation
+invariance is verified within floating-point tolerances on tiny random models; this is not a
+task-accuracy claim for new weights. Compiled/FP16 reductions can differ in the last decimals,
+and exact or near ties can choose a different label.
+
+Language detection now avoids treating all-capital acronyms/address fragments as French or
+Spanish while preserving emphasis capitals and mixed scripts. French device footers such as
+`Envoyé depuis mon iPhone` are correctly removed. Language detection remains heuristic.
+
+The original sequential architecture checks remain pinned to `573e5b6`; parallel layout checks
+use the actual upstream v0.4.1 implementation pinned at `1adc59f`. CI runs both references. The three published checkpoints were rechecked in FP32/FP16:
+378/378 argmax agreements, 100 deterministic finite calls per configuration, and zero measured
+active-memory growth ([raw validation report](benchmarks/results/upstream-v041-validation.json)).
+This port does not include the upstream batch/long-document, structured-decisions, hooks,
+HTTP/MCP server, training, or other backend/SDK APIs.
+
 ### Selected upstream fixes after v0.3.5
 
 The runtime selectively incorporates input, routing and email fixes from upstream
@@ -256,6 +346,9 @@ uv sync --extra dev --extra reference --extra benchmark --extra demo
 source .venv/bin/activate
 gh repo clone NandhaKishorM/laya .upstream
 git -C .upstream checkout 573e5b62696ba441230cd6be71d593331b5d23af
+# Independent reference for parallel-layout parity:
+gh repo clone NandhaKishorM/laya .cache/upstream-v0.4.1
+git -C .cache/upstream-v0.4.1 checkout 1adc59f7e371deb601fcfa18a14e25db238addcc
 pytest -q
 python -m benchmarks.download
 python -m benchmarks.validate --repeats 100

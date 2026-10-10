@@ -4,7 +4,15 @@ from collections import OrderedDict
 from dataclasses import dataclass
 from threading import RLock
 
-from .common import QTYPES, build_prefix, finish_sequence, render_options, serialize_state
+from .common import (
+    QTYPES,
+    build_prefix,
+    finish_sequence,
+    parallel_layout,
+    render_options,
+    serialize_state,
+    uses_parallel_layout,
+)
 
 
 @dataclass(frozen=True)
@@ -69,5 +77,10 @@ class PrefixCache:
                     "state_stats": state_stats,
                 }
             )
+            if uses_parallel_layout(agent.cfg):
+                layout = parallel_layout(
+                    list(prefix.markers), len(prefix.ids), max(len(prefix.ids), len(ids))
+                )
+                items[-1]["layout"] = {k: v[: len(ids)] for k, v in layout.items()}
             internal.append(q)
         return items, internal

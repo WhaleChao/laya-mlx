@@ -17,3 +17,9 @@ Selected inference, input validation, routing, language and email fixes adapted
 from upstream revision 4aa6761 (v0.3.23 source tree). This is a selective sync,
 not an implementation of every upstream API. The neural architecture parity
 reference remains 573e5b62696ba441230cd6be71d593331b5d23af.
+
+Additional lifecycle/registry, language, email, tournament and confidence-gate
+behavior adapted from upstream revision
+1adc59f7e371deb601fcfa18a14e25db238addcc (v0.4.1). Parallel option layout and masks
+are reimplemented in MLX and checked against that revision. Sequential model
+parity remains checked against the original reference above.

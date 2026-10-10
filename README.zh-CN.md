@@ -168,6 +168,43 @@ uv run laya-mlx convert \
 这是独立的 MLX 移植，模型能力及其限制来自上游；模型输出概率不等于答案必然正确。采用 Apache-2.0，原作者与移植说明见 [NOTICE](NOTICE)。
 
 
+### 上游 v0.4.1 运行时移植
+
+v0.4.0 已选择性移植上游 `1adc59f`（v0.4.1）。**默认行为变更：**`Router()` 对语言
+不确定的文本改用 multilingual，包括 `refund me` 这样的短句；已识别的英语仍走 english。
+需要保留旧回退策略时，使用 `Router(default="english")`。默认仍只驻留一个模型；频繁切换
+语言时可设置 `max_loaded=2` 或预加载。
+
+- 冷加载不再占用生命周期全局锁，已加载模型及状态查询不必等待；同一检查点的并发加载
+  仍共享一次构建。`unload(name)` 只等待同一检查点，`unload()` 等待全部构建完成。
+  卸载/淘汰释放 MLX 空闲缓存，不会使调用方或正在推理的请求持有的模型失效。
+  清理的是进程级空闲缓存，后续请求可能需要重新分配缓冲区。
+- `models={"billing": "./models/billing-mlx"}`、`register(name, source, description=None)`、
+  `unregister(name)`、`registered` 支持独立命名的微调模型。替换源会失效旧驻留模型，
+  并防止加载中的旧源重新进入缓存。内置模型及当前默认模型不能被注销。
+- `Agent.predict` / `Router.predict` 支持 `min_confidence=0.8`，或
+  `min_confidence={"choice:2": 0.8, "choice:11+": 0.95, "default": 0.7}`。
+  输出增加 `abstention`（`passed` / `abstained` / `unevaluated`）、实际门槛及低置信度标记；
+  答案仍保留，不会自动调用其他模型。未设置门槛时输出不增加这些字段。
+  未配置的桶回退到 `default`，再回退到零；非法桶名、NaN 和无穷门槛提前报错。
+  门槛依据 `answer_confidence`，temperature clamp 本身不保证概率校准。
+- `predict_tournament(agent_or_router, state, questions, group_size=16, **kwargs)`
+  无需 embedding 模型，通过分组选优逐轮缩减大选项集合；会增加推理次数，分组及早期淘汰
+  可能影响结果。返回概率、置信度和 `usage` 只覆盖最后一轮；`tournament[qid]` 记录
+  最终 `labels`、原始数量 `n` 和淘汰轮数 `rounds`。
+- 完整支持配置为 `option_layout="parallel"` 的新检查点：共享选项位置编码、隔离选项的
+  attention mask、编译推理、前缀缓存及转换回读。未配置时仍采用 sequential，未知值报错。
+  **不要直接修改旧权重配置来启用 parallel**，这属于训练时的输入布局。
+  新布局已针对小型随机模型验证选项重排不变性，不代表新权重的业务准确率。
+- 修复全大写缩写/地址被误判为法语或西班牙语的问题，同时保护强调大写及混合文字；
+  修复 `Envoyé depuis mon iPhone` 等法语设备签名的清理。
+
+旧 sequential 架构继续对齐 `573e5b6`；parallel layout 对照测试固定到上游 `1adc59f`，
+CI 同时运行两套参考。三个已发布检查点的 FP32/FP16 重新验证通过 378/378 个 argmax 对齐，
+每组 100 次重复调用均为有限、确定输出，活跃内存增长为零
+（[原始验证报告](benchmarks/results/upstream-v041-validation.json)）。本次仍不包含上游 batch/长文档、structured decisions、hooks、
+HTTP/MCP 服务、训练及其他后端/语言 SDK。使用示例及复现命令见[英文 README](README.md#upstream-v041-runtime-port)。
+
 ### v0.3.5 之后的上游修复
 
 已选择性移植上游 `4aa6761`（v0.3.23 源码树）的输入处理、语言路由及邮件清理修复；

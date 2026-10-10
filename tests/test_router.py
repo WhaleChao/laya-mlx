@@ -205,7 +205,8 @@ def test_english_routing_unchanged():
     assert (
         router.route("Please refund the duplicate charge on invoice 4411 today.").model == "english"
     )
-    assert router.route("refund me").model == "english"
+    assert router.route("refund me").model == "multilingual"  # short text is undecided
+    assert Router(default="english").route("refund me").model == "english"
     assert router.route("Հայերեն", model="english").model == "english"
     assert normalise_name("ML") == "multilingual"
 
